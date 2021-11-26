@@ -1,0 +1,489 @@
+---
+title: "Case Study 02"
+author: "Hien Lam"
+date: "11/29/2021"
+output: html_notebook
+abstract: "How does company culture affect attrition?"
+---
+## Read and tidy the data
+
+Load the necessary packages
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(viridis)
+library(ggridges)
+library(cowplot)
+library(lemon) # uninstall if not used
+library(caret) #confusion matrix
+library(e1071)
+library(class) #knn.cv
+```
+Read the data
+```{r message=FALSE, warning=FALSE}
+attr <- read_csv('https://raw.githubusercontent.com/hmlam1/CaseStudy02DDS/main/CaseStudy02.csv', show_col_types=F)
+```
+Study the data: 870 rows (observations) and 36 columns (variables). First 10 rows are printed to allow reader to click through the columns.
+```{r}
+dim(attr)
+spec(attr)
+head(attr, n=10)
+```
+Remove columns with single unique value as they are not useful for EDA or prediction
+```{r}
+attr <- attr %>% select(-c('Over18', 'EmployeeCount', 'EmployeeNumber', 'PerformanceRating', 'StandardHours'))
+```
+
+Confirm that there are zero NA values
+```{r}
+sum(as.numeric(is.na.data.frame(attr)))
+```
+I copied *Attrition* into a new column called *attr10*, replaced "No" with 0 and "Yes" with 1, set class as numeric for aggregate function to calculate attrition percentages.
+```{r}
+attr <- attr %>% mutate(attr10 = Attrition, attr10 = replace(attr10, attr10 != "No", 1))
+attr <- attr %>% mutate(attr10 = replace(attr10, attr10 != "1", 0))
+attr$attr10 <- as.numeric(attr$attr10)
+```
+
+---
+
+## Study the data
+
+Observations:
+
+Age
+
+- Distribution is right skewed; must log transform prior to modeling  
+- Age vs attrition is very significant; highest between 18-22 at >50%
+- Age vs job role is significant  
+- Age vs gender and department is about even
+```{r}
+# dist of age
+hist(attr$Age, breaks=50, main='Distribution of Age', xlab = 'Age')
+quantile(attr$Age)
+# vs gender, department, job role
+boxplot(Age~Gender, data=attr) # insig
+boxplot(Age~Department, data=attr) # significant ish
+boxplot(Age~JobRole, data=attr) # significant
+# vs edu?
+# edu vs gender?
+```
+Attrition (as it relates to personal self/life)
+
+- 140 attrition, 730 no attrition  
+- vs gender is about even (15% female, 17% male)  
+- Age vs attrition is very significant; highest between 18-22 at >50%  
+- Highest for single marital status at 26%  
+- Increases as distance from home goes up; 15%+ for 12.2+ miles  
+- Increases as education level goes down  
+- Highest for hr 27%, tech degree and marketing 20-23% (edu field)  
+- Highest for sales department at 22%   
+- Highest for sales rep at 45%, hr/lab tech 20-22% (job role)  
+- Highest for lowest job level at 26%  
+- Highest for 5> total working years at 31%  
+- Highest for 5+ number of companies worked all >20%
+
+Attrition (as it relates to work culture)
+
+- Highest for lowest perceived level of job involvement at 47%  
+- Highest for lowest perceived level of work life balance at 35%  
+- Highest for overtime at 32%  
+- Attr increases with decreasing years in current role; 0-3 years 30%  
+- Highest for the least (26%) and best (22%) stock option level. Take a closer look  
+- Highest for lowest perceived level of environment satisfaction at 24%  
+- Highest for lowest perceived level of job satisfaction at 21%  
+- Highest for the first 3 years at company. Will exclude this var as it will skew the model bc not all the years have equal representation
+- Highest for travel frequently for business travel at 22%  
+- Highest for first 2 years in current role at 23%  
+- Highest for lowest relationship satisfaction with manager at 20%  
+- Higher for increasing years since last promotion. Uneven distribution. Probably should not include this in the model  
+- Highest for initial year with current manager however it is skewed for 14 year mark. Either remove that value or don't include variable in model
+- Inconclusive for training times last year
+- Inconclusive for percent salary hike. Need to look closer against other variables
+```{r eval=FALSE, include=FALSE}
+# attr count. 0 = "No" 1 = "Yes"
+attr %>% count(Attrition)
+hist(attr$attr10)
+# vs gender. insig
+aggregate(attr10~Gender, data=attr, mean)
+# vs age. sig
+attr.age <- aggregate(x = attr$attr10, by = list(cut(attr$Age, 10)), mean)
+names(attr.age) <- c('Age', 'Attrition')
+ggplot(attr.age, aes(x = Age, y = Attrition)) + geom_bar(stat = "identity")
+# vs marital status. sig
+attr.mar <- aggregate(attr10~MaritalStatus, data=attr, mean)
+ggplot(attr.mar, aes(x = MaritalStatus, y = attr10)) + geom_bar(stat = "identity")
+# vs distance from home. sig
+attr.dist <- aggregate(x = attr$attr10, by = list(cut(attr$DistanceFromHome, 10)), mean)
+names(attr.dist) <- c('dist', 'Attrition')
+ggplot(attr.dist, aes(x = dist, y = Attrition)) + geom_bar(stat = "identity")
+# education level. sig if comparing lowest and highest edu levels
+attr.edu <- aggregate(attr10~Education, data=attr, mean)
+ggplot(attr.edu, aes(x = Education, y = attr10)) + geom_bar(stat = "identity")
+# education field. sig
+attr.eduf <- aggregate(attr10~EducationField, data=attr, mean)
+ggplot(attr.eduf, aes(x = EducationField, y = attr10)) + geom_bar(stat = "identity")
+# total working years. very sig
+attr.work <- aggregate(x = attr$attr10, by = list(cut(attr$TotalWorkingYears, 8)), mean)
+names(attr.work) <- c('total', 'Attrition')
+ggplot(attr.work, aes(x = total, y = Attrition)) + geom_bar(stat = "identity")
+# number of companies worked. sig
+attr.ncomp <- aggregate(attr10~NumCompaniesWorked, data=attr, mean)
+ggplot(attr.ncomp, aes(x = NumCompaniesWorked, y = attr10)) + geom_bar(stat = "identity")
+# vs department. sig
+attr.dep <- aggregate(attr10~Department, data=attr, mean) 
+ggplot(attr.dep, aes(x = Department, y = attr10)) + geom_bar(stat = "identity")
+# vs job role. very sig
+attr.role <- aggregate(attr10~JobRole, data=attr, mean) 
+ggplot(attr.role, aes(x = JobRole, y = attr10)) + geom_bar(stat = "identity")
+# job level. sig
+attr.level <- aggregate(attr10~JobLevel, data=attr, mean)
+ggplot(attr.level, aes(x = JobLevel, y = attr10)) + geom_bar(stat = "identity")
+```
+
+```{r eval=FALSE, include=FALSE}
+# job involvement. very sig
+attr.inv <- aggregate(attr10~JobInvolvement, data=attr, mean)
+ggplot(attr.inv, aes(x = JobInvolvement, y = attr10)) + geom_bar(stat = "identity")
+# job satisfaction. sig
+attr.satis <- aggregate(attr10~JobSatisfaction, data=attr, mean)
+ggplot(attr.satis, aes(x = JobSatisfaction, y = attr10)) + geom_bar(stat = "identity")
+# vs work life balance. very sig
+attr.wlb <- aggregate(attr10~WorkLifeBalance, data=attr, mean)
+ggplot(attr.wlb, aes(x = WorkLifeBalance, y = attr10)) + geom_bar(stat = "identity")
+# years at company. sig but misleading
+attr.yrcomp <- aggregate(x = attr$attr10, by = list(cut(attr$YearsAtCompany, 20)), mean)
+names(attr.yrcomp) <- c('Years', 'Attrition')
+ggplot(attr.yrcomp, aes(x = Years, y = Attrition)) + geom_bar(stat = "identity")
+# years in current role
+attr.yrcur <- aggregate(x = attr$attr10, by = list(cut(attr$YearsInCurrentRole, 9)), mean)
+names(attr.yrcur) <- c('Years', 'Attrition')
+ggplot(attr.yrcur, aes(x = Years, y = Attrition)) + geom_bar(stat = "identity")
+# vs business travel. sig
+attr.travel <- aggregate(attr10~BusinessTravel, data=attr, mean)
+ggplot(attr.travel, aes(x = BusinessTravel, y = attr10)) + geom_bar(stat = "identity")
+# vs environment satisfaction. sig
+attr.env <- aggregate(attr10~EnvironmentSatisfaction, data=attr, mean)
+ggplot(attr.env, aes(x = EnvironmentSatisfaction, y = attr10)) + geom_bar(stat = "identity")
+# vs overtime. very sig
+attr.ot <- aggregate(attr10~OverTime, data=attr, mean)
+ggplot(attr.ot, aes(x = OverTime, y = attr10)) + geom_bar(stat = "identity")
+# vs stock option level.
+attr.stock <- aggregate(attr10~StockOptionLevel, data=attr, mean)
+ggplot(attr.stock, aes(x = StockOptionLevel, y = attr10)) + geom_bar(stat = "identity")
+# vs percent salary hike. insig. might be related to a diff variable
+attr.inc <- aggregate(attr10~PercentSalaryHike, data=attr, mean)
+ggplot(attr.inc, aes(x = PercentSalaryHike, y = attr10)) + geom_bar(stat = "identity")
+# vs years since last promotion. sig but inconsistent
+attr.yrpromo <- aggregate(attr10~YearsSinceLastPromotion, data=attr, mean)
+ggplot(attr.yrpromo, aes(x = YearsSinceLastPromotion, y = attr10)) + geom_bar(stat = "identity")
+# vs training times last year. sig but inconsistent
+attr.train <- aggregate(attr10~TrainingTimesLastYear, data=attr, mean)
+ggplot(attr.train, aes(x = TrainingTimesLastYear, y = attr10)) + geom_bar(stat = "identity")
+# vs years with current manager. sig but inconsistent
+attr.yrman <- aggregate(attr10~YearsWithCurrManager, data=attr, mean)
+ggplot(attr.yrman, aes(x = YearsWithCurrManager, y = attr10)) + geom_bar(stat = "identity")
+# vs relationship satisfaction w manager. barely sig
+attr.mansatis <- aggregate(attr10~RelationshipSatisfaction, data=attr, mean)
+ggplot(attr.mansatis, aes(x = RelationshipSatisfaction, y = attr10)) + geom_bar(stat = "identity")
+# Rate: hourly, daily, monthly, monthly income. Plot one
+```
+
+Miscellaneous ways to check correlation. ignore for now
+``` {r}
+attr.quant <- select_if(attr, is.numeric)
+plot(attr[,c(2:10)], col = 'royalblue')
+colnames(attr.quant)
+symnum(cor(attr.quant[,c(2:24)], use='complete.obs'))
+```
+
+---
+
+## EDA
+
+### Years in current role vs attr
+
+30% attr in first year. 23% in first 3 years.
+```{r}
+# density of YearsInCurrentRole with attr == yes overlay. WHY does it look weird?!
+yrs.attr.yes <- attr %>% select(YearsInCurrentRole, Attrition) %>% filter(Attrition == 'Yes')
+
+ggplot() +
+geom_density(data = attr, aes(x = YearsInCurrentRole),
+fill = "lightgray", color = "grey", alpha = 0.85) +
+geom_density(data = yrs.attr.yes, aes(x = YearsInCurrentRole),
+fill = "royalblue", color = "royalblue", alpha = 0.2)
+
+# density plot of YearsinCurrentRole with attr
+attr %>% ggplot(aes(YearsInCurrentRole, fill=Attrition)) + geom_density(alpha=0.5)
+
+# count instead of density
+ggplot(attr, aes(YearsInCurrentRole, y=..count.., fill=Attrition)) +
+geom_density(color = "black", alpha = 0.7) +
+scale_fill_manual(values = c("#E69F00", "#56B4E9"))
+
+ggplot(attr, aes(YearsInCurrentRole, y=..count..)) +
+geom_density(color = "black", alpha = 0.7, fill='royalblue')
+```
+### Job involvement vs attr
+```{r}
+# density plot
+ggplot(data=attr, aes(x=Attrition, group=JobInvolvement, fill=JobInvolvement)) +
+geom_density(adjust=1.25, position="fill")
+
+# heatmap. change 1-4 to very unsatisfied - very satisfied?
+attr.ji <- attr %>% count(Attrition, JobInvolvement)
+attr.ji <- pivot_wider(attr.ji, names_from = Attrition, values_from = n)
+attr.ji <- attr.ji %>% mutate(sum = rowSums(attr.ji[,c(2:3)]))
+attr.ji <- pivot_longer(attr.ji, c(2:3), names_to='Attrition', values_to = "value")
+attr.ji <- attr.ji %>% mutate(perc=value/sum*100)
+# plot without borders
+ggplot(attr.ji, aes(x=JobInvolvement, y=Attrition, fill=perc)) + geom_tile() + geom_text(aes(label = perc), color = "white", size = 4) + coord_fixed() + scale_fill_viridis(option='F', begin=.2, direction=-1) + guides(fill = guide_colourbar(title='Attrition \nPercent', ticks = FALSE, barwidth = .75, barheight = 20))
+# with borders
+ggplot(attr.ji, aes(x=JobInvolvement, y=Attrition, fill=perc)) + geom_tile(color = "white", lwd = 1.5, linetype = 1) + geom_text(aes(label = perc), color = "white", size = 4) + coord_fixed() + scale_fill_viridis(option='F', begin=.2, direction=-1) + guides(fill = guide_colourbar(title='Attrition \nPercent', ticks = FALSE, barwidth = .75, barheight = 20))
+```
+### Job role vs monthly income
+```{r}
+ggplot(attr, aes(x = MonthlyIncome, y = JobRole, fill = stat(x))) +
+geom_density_ridges_gradient(scale = 2.5, rel_min_height = 0.01) +
+scale_fill_viridis(name = "Monthly Income", option = "F", direction=-1, begin=.15, end=.9)
+
+# job role vs attrition. sales rep 45% hr 22%
+# unsurprising, income drives attrition but is there an underlying cause?
+role.attr <-  attr %>% count(Attrition, JobRole)
+role.attr <- pivot_wider(role.attr, names_from = Attrition, values_from = n)
+role.attr <- role.attr %>% mutate(Perc = Yes/(No+Yes))
+arrange(role.attr, -Perc)
+
+# fail. job role vs work life balance
+role.wlb <-  attr %>% count(WorkLifeBalance, JobRole)
+role.wlb <- pivot_wider(role.wlb, names_from = WorkLifeBalance, values_from = n)
+role.wlb %>% mutate(perc = rowMeans(role.wlb[,c(2:5)], na.rm=TRUE))
+
+# job role vs job satisfaction
+## replace 1-4 with very unsatisfied-very satisfied
+attr$JobSatisfaction <- ifelse(attr$JobSatisfaction == 1, 'Very unsatisfied', attr$JobSatisfaction)
+attr$JobSatisfaction <- ifelse(attr$JobSatisfaction == 2, 'Unsatisfied', attr$JobSatisfaction)
+attr$JobSatisfaction <- ifelse(attr$JobSatisfaction == 3, 'Satisfied', attr$JobSatisfaction)
+attr$JobSatisfaction <- ifelse(attr$JobSatisfaction == 4, 'Very satisfied', attr$JobSatisfaction)
+## % of job satis level 1 for each job role 
+role.satis <-  attr %>% count(JobSatisfaction, JobRole)
+role.satis <- pivot_wider(role.satis, names_from = JobSatisfaction, values_from = n)
+role.satis <- role.satis %>% mutate(sum = rowSums(role.satis[,c(2:5)], na.rm=TRUE), perc=`1`/sum)
+arrange(role.satis, -perc)
+# % of env satis level 1 for each job role
+role.env <-  attr %>% count(EnvironmentSatisfaction, JobRole)
+role.env <- pivot_wider(role.env, names_from = EnvironmentSatisfaction, values_from = n)
+role.env <- role.env %>% mutate(sum = rowSums(role.env[,c(2:5)], na.rm=TRUE), perc=`1`/sum)
+arrange(role.env, -perc)
+```
+
+---
+
+## Analysis (backed up with robust experimentation & appropriate visualizations)
+
+### Identify top three factors that contribute to turnover
+
+1. Years in current role  
+2. Job involvement  
+3. Work life balance
+```{r}
+
+```
+### Job role specific trends
+
+Display monthly salary for each role and their attrition %. Attr is high for lower salary. Nothing new here. Let's dive deeper.
+```{r}
+
+```
+### Other interesting trends or observations
+
+Unsurprising, income drives attrition but is there an underlying cause? Looked at wlb, job & env satisfaction. sales rep is high (favorable) for those factors yet high attr so income matters to a threshold then attr decreases when income is high yet low cultural variables.
+```{r}
+
+```
+
+---
+
+## Prediction using KNN, Naïve Bayes, and Linear Regression 
+
+### Attrition (min. 60% sensi & speci)
+```{r}
+#### KNN -- Not Running
+set.seed(6)
+splitPerc = .70
+summary(attr.quant)
+trainIndices = sample(1:dim(attr.quant)[1],round(splitPerc * dim(attr.quant)[1]))
+trainIndices
+train = attr.quant[trainIndices,]
+test = attr.quant[-trainIndices,]
+
+train
+
+
+# k = 3
+classifications = knn(train[,c(1,4)],test[,c(1,4)],train$Attrition, prob = TRUE, k = 3)
+table(classifications,test$Species)
+confusionMatrix(table(classifications,test$Species))
+# k = 5
+classifications = knn(train[,c(1,2)],test[,c(1,2)],train$Attrition, prob = TRUE, k = 5)
+table(test$Species,classifications)
+confusionMatrix(table(test$Species,classifications))
+# k = 10
+classifications = knn(train[,c(1,2)],test[,c(1,2)],train$Attrition, prob = TRUE, k = 10)
+table(test$Species,classifications)
+confusionMatrix(table(test$Species,classifications))
+# k = 20
+classifications = knn(train[,c(1,2)],test[,c(1,2)],train$Attrition, prob = TRUE, k = 20)
+table(test$Species,classifications)
+CM = confusionMatrix(table(test$Species,classifications))
+CM$overall[1]
+
+
+#### Naïve Bayes #works :)
+model = naiveBayes(Attrition~.,data = attr)
+predict(model,attr[,c(16,17)])
+predict(model,attr[,c(1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32)])
+df = data.frame(MaritialStatus = "Single", JobSatisfaction = "Very unsatisfied")
+predict(model,df) #just classifications
+predict(model,df, type = "raw") #gives probabilities 
+#           No       Yes
+#[1,] 0.7877095 0.2122905
+
+
+#### Linear Regression -- Finding best model 
+# need to utilize numeric values only
+
+#degree 1 model - Age vs Attrition
+fit = lm(Age~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - Daily Rate vs Attrition
+fit = lm(DailyRate~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - DistanceFromHome vs Attrition
+fit = lm(DistanceFromHome~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - Environment vs Attrition
+fit = lm(EnvironmentSatisfaction~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - Education vs Attrition
+fit = lm(Education~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - HourlyRate vs Attrition
+fit = lm(HourlyRate~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - JobInvolvenemtn vs Attrition
+fit = lm(JobInvolvement~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - JobLevel vs Attrition
+fit = lm(JobLevel~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - JobSatisfaction vs Attrition
+fit = lm(JobSatisfaction~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - MonthlyIncome vs Attrition
+fit = lm(MonthlyIncome~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - MonthlyRate vs Attrition
+fit = lm(MonthlyRate~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - NumCompaniesWorked vs Attrition
+fit = lm(NumCompaniesWorked~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - PercentSalarayHike vs Attrition
+fit = lm(PercentSalaryHike~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - RelationshipSatisfaction vs Attrition
+fit = lm(RelationshipSatisfaction~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - StockOptionLevel vs Attrition
+fit = lm(StockOptionLevel~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - TotalWorkingYears vs Attrition
+fit = lm(TotalWorkingYears~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - TrainingTimesLastYear vs Attrition
+fit = lm(TrainingTimesLastYear~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - Worklifebalance vs Attrition
+fit = lm(WorkLifeBalance~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - YEarsAtCompanye vs Attrition
+fit = lm(YearsAtCompany~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - YearsInCurrentRole vs Attrition
+fit = lm(YearsInCurrentRole~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - YearsSinceLastPromotion vs Attrition
+fit = lm(YearsSinceLastPromotion~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+#degree 1 model - YearsWithCurrentManager vs Attrition
+fit = lm(YearsWithCurrManager~attr10, attr.quant)
+summary(fit)
+confint(fit)
+
+
+
+
+
+#degree 2 model - if necessary
+mtcars %>% ggplot(aes(x = wt, y = mpg)) + geom_point()
+mtcars3 = mtcars %>% mutate(wt2 = wt^2)
+fit = lm(mpg~wt+wt2, mtcars3)
+summary(fit)
+
+
+
+
+#
+
+```
+### Monthly salary (RMSE <3000)
+```{r}
+
+```
+
+## Appendix
+
+Plots from observations that were not shown for brevity
